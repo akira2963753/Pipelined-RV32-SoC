@@ -1,0 +1,4 @@
+-sverilog ./AXI4_PKG.sv
+-sverilog ./AXI4_Bus.sv
+-sverilog ../00_TESTBED/PATTERN.sv
+-sverilog ../00_TESTBED/TESTBED.sv

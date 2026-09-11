@@ -1,0 +1,7 @@
+# Preserve archived sources that were originally committed with CRLF endings.
+five-stage-example/** -text
+five-stage-example/Pattern/TestCase11.dat text eol=lf
+five-stage-example/Pattern/TestCase12.dat text eol=lf
+five-stage-example/RTL/PC_Adder.v text eol=lf
+ip/CACHE/legacy/Constraint.xdc -text
+ip/CACHE/legacy/I-CACHE/Mem_Data/test_data.coe -text

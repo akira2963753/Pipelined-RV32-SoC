@@ -59,11 +59,13 @@ Architecture diagrams and design notes are available in [`SPEC/`](SPEC/).
 
 ```text
 .
-|-- CACHE/
-|   |-- AXI4/                    # AXI4 bus, testbench, pattern, and SVA checker
-|   |-- I-CACHE/                 # Instruction cache RTL and standalone tests
-|   `-- D-CACHE/                 # Data cache RTL and standalone tests
-|-- Five-Stage-Pipelined-CPU/    # CPU core without the cache/AXI4 integration
+|-- five-stage-example/          # Frozen educational five-stage CPU reference
+|-- ip/
+|   |-- AXI4/                    # AXI4-to-BRAM bridge RTL and standalone tests
+|   `-- CACHE/
+|       |-- 00_TESTBED/          # Combined cache VCS verification
+|       |-- 01_RTL/              # Active I-Cache and D-Cache RTL
+|       `-- legacy/              # Previous cache implementation and XDC
 |-- RISC-V-Processor/            # Integrated processor and regression flow
 |   |-- RTL/
 |   |-- Pattern/                 # Existing assembly-style test cases
@@ -123,11 +125,9 @@ their test programs.
 
 ### AXI4 protocol checking
 
-[`CACHE/AXI4/CHECKER.sv`](CACHE/AXI4/CHECKER.sv) contains SystemVerilog
-Assertions for the AXI4 channels, including payload stability under backpressure,
-burst attributes, response ordering, IDs, `RLAST`/`WLAST`, and reset behavior.
-The processor testbench instantiates one checker for the instruction bus and
-one for the data bus.
+The standalone AXI4 verification environment is located under
+[`ip/AXI4/`](ip/AXI4/). Cache integration tests and protocol assertions are
+located under [`ip/CACHE/`](ip/CACHE/).
 
 ## Synthesis result
 
