@@ -6,7 +6,7 @@
 #======================================================
 #              Set your desired file names
 #======================================================
-top_design=Handshaker
+top_design=AXI4_Bus
 source_file="file.f"
 TIMESCALE="-timescale=1ns/1ps"
 syn_tcl="syn90.tcl"
