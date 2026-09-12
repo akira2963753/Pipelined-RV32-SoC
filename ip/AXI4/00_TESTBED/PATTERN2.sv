@@ -1435,13 +1435,14 @@ module PATTERN2 #(
             int unsigned read_num;
 
             $display("[SEQ] write stream then read stream x%0d", num);
+            ctrl = new();
             for (int i = 0; i < num; i++) begin
                 write_num = $urandom_range(5, 2);
                 for (int w = 0; w < write_num; w++) begin
                     wr = new($sformatf("seq_stream_w_%0d_%0d", i, w));
                     if (!randomize_ok(wr)) continue;
                     wr.print();
-                    env.driver.drive_write(wr, new());
+                    env.driver.drive_write(wr, ctrl);
                 end
 
                 read_num = $urandom_range(5, 2);
@@ -1451,7 +1452,7 @@ module PATTERN2 #(
                     rd = new(wr.name);
                     rd.copy_from_write(wr);
                     rd.print();
-                    env.driver.drive_read(rd, new());
+                    env.driver.drive_read(rd, ctrl);
                 end
             end
         endtask
