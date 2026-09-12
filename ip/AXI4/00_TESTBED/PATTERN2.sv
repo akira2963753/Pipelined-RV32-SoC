@@ -475,6 +475,9 @@ module PATTERN2 #(
             end
 
             @(posedge ACLK);
+            // Deassert on negedge, after the DUT has sampled B_VALID && B_READY.
+            // Deasserting at this posedge races the DUT's always_ff block.
+            @(negedge ACLK);
             B_READY = 1'b0;
         endtask
 
@@ -510,6 +513,9 @@ module PATTERN2 #(
                 end
 
                 @(posedge ACLK);
+                // Deassert on negedge, after the DUT has sampled R_VALID && R_READY.
+                // Deasserting at this posedge races the DUT's always_ff block.
+                @(negedge ACLK);
                 R_READY = 1'b0;
             end
         endtask
