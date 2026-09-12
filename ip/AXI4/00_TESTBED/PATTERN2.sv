@@ -614,7 +614,7 @@ module PATTERN2 #(
             wr_beat_count = 0;
         endfunction
 
-        function void capture_w();
+        task automatic capture_w();
             if (!wr_collect_active || pending_wr == null) begin
                 $fatal(1, "[INMON ERROR]: W handshake without active AW collection");
             end
@@ -633,9 +633,9 @@ module PATTERN2 #(
                 wr_beat_count = 0;
                 pending_wr = null;
             end
-        endfunction
+        endtask
 
-        function void capture_ar();
+        task automatic capture_ar();
             axi_read_request rd;
 
             rd = new("mon_observed_read");
@@ -649,7 +649,7 @@ module PATTERN2 #(
             rd.prot = AR_PROT;
             rd.qos = AR_QOS;
             rd_req_mb.put(rd);
-        endfunction
+        endtask
     endclass
 
     // ============================================================================
@@ -683,16 +683,16 @@ module PATTERN2 #(
             end
         endtask
 
-        function void capture_b();
+        task automatic capture_b();
             axi_b_response b;
 
             b = new("act_b");
             b.id = B_ID;
             b.resp = B_RESP;
             act_b_mb.put(b);
-        endfunction
+        endtask
 
-        function void capture_r();
+        task automatic capture_r();
             axi_r_beat r;
 
             r = new("act_r");
@@ -706,7 +706,7 @@ module PATTERN2 #(
             r_beat_index = r_beat_index + 1;
 
             if (R_LAST) r_beat_index = 0;
-        endfunction
+        endtask
     endclass
 
     // ============================================================================
