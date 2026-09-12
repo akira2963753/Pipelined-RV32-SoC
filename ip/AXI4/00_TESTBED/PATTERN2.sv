@@ -1047,8 +1047,8 @@ module PATTERN2 #(
 
             cp_aw_stall: coverpoint aw_stall {
                 bins none = {0};
-                bins small = {[1:3]};
-                bins large = {[4:$]};
+                bins short_stall = {[1:3]};
+                bins long_stall = {[4:$]};
             }
 
             cp_b_stall: coverpoint b_stall {
