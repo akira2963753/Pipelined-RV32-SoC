@@ -132,6 +132,9 @@ module PATTERN2 #(
         rand bit [DATA_W-1:0] data[];
         rand bit [STRB_W-1:0] strb[];
 
+    // ============================================================================
+    //                                  Constraints
+    // ============================================================================    
         constraint c_supported {
             len inside {[0:15]};
             size == BYTE_OFFSET_W;
@@ -161,7 +164,9 @@ module PATTERN2 #(
         constraint c_solve_order {
             solve len before addr;
         }
-
+    // ============================================================================
+    //                                  Function
+    // ============================================================================
         function new(input string name = "axi_write_transaction");
             this.name = name;
         endfunction
@@ -172,27 +177,6 @@ module PATTERN2 #(
 
         function bit [ADDR_W-1:0] get_beat_address(input int unsigned beat_index);
             return addr + (beat_index << size);
-        endfunction
-
-        function axi_write_transaction copy();
-            axi_write_transaction txn;
-            txn = new(name);
-            txn.id = id;
-            txn.addr = addr;
-            txn.len = len;
-            txn.size = size;
-            txn.burst = burst;
-            txn.lock = lock;
-            txn.cache = cache;
-            txn.prot = prot;
-            txn.qos = qos;
-            txn.data = new[len + 1];
-            txn.strb = new[len + 1];
-            foreach (data[beat_index]) begin
-                txn.data[beat_index] = data[beat_index];
-                txn.strb[beat_index] = strb[beat_index];
-            end
-            return txn;
         endfunction
 
         function void print();
@@ -212,6 +196,10 @@ module PATTERN2 #(
             $display("================================================================");
         endfunction
     endclass
+
+    // ============================================================================
+    //                          Request and Response Class
+    // ============================================================================
 
     class axi_read_request;
         string name;
@@ -259,17 +247,17 @@ module PATTERN2 #(
     endclass
 
     class axi_b_response;
-        string tag;
+        string name;
         bit [ID_W-1:0] id;
         resp_type resp;
 
-        function new(input string tag = "B");
-            this.tag = tag;
+        function new(input string name = "B");
+            this.name = name;
         endfunction
     endclass
 
     class axi_r_beat;
-        string tag;
+        string name;
         bit [ID_W-1:0] id;
         bit [ADDR_W-1:0] addr;
         bit [DATA_W-1:0] data;
@@ -277,8 +265,8 @@ module PATTERN2 #(
         bit last;
         int unsigned beat_index;
 
-        function new(input string tag = "R");
-            this.tag = tag;
+        function new(input string name = "R");
+            this.name = name;
         endfunction
     endclass
 
@@ -288,23 +276,25 @@ module PATTERN2 #(
 
     class axi_driver_ctrl;
         int unsigned aw_delay_cycles;
-        int unsigned w_gap_cycles;
+        int unsigned w_delay_cycles;
         int unsigned ar_delay_cycles;
-        int unsigned b_ready_delay;
-        int unsigned r_ready_delay;
-        bit w_before_aw;
-        bit random_b_stall;
-        bit random_r_stall;
+        rand int unsigned b_ready_delay;
+        rand int unsigned r_ready_delay;
+
+        constraint c_b_ready_delay {
+            b_ready_delay inside {[0:10]};
+        }
+
+        constraint c_r_ready_delay {
+            r_ready_delay inside {[0:10]};
+        }
 
         function new();
             aw_delay_cycles = 0;
-            w_gap_cycles = 0;
+            w_delay_cycles = 0;
             ar_delay_cycles = 0;
             b_ready_delay = 0;
             r_ready_delay = 0;
-            w_before_aw = 1'b0;
-            random_b_stall = 1'b0;
-            random_r_stall = 1'b0;
         endfunction
     endclass
 
@@ -313,10 +303,15 @@ module PATTERN2 #(
     // ============================================================================
 
     class axi_driver;
+        // 紀錄 AW_VALID 送出，但是 AW_READY = 0 的 cycle
         int unsigned aw_stall_cycles;
+        // 紀錄 W_VALID 送出，但是 W_READY = 0 的 cylce
         int unsigned w_stall_cycles;
+        // 紀錄 driver 故意讓 B_READY = 0 的 cycle
         int unsigned b_stall_cycles;
+        // 紀錄 AR_VALID 送出，但是 AR_READY = 0 的 cylce
         int unsigned ar_stall_cycles;
+        // 紀錄 driver 故意讓 R_READY = 0 的 cycle
         int unsigned r_stall_cycles;
 
         function new();
@@ -382,16 +377,26 @@ module PATTERN2 #(
                 cycles = cycles + 1;
                 aw_stall_cycles = aw_stall_cycles + 1;
                 CHECK_DRV_AW_HS: assert (cycles < `HS_TIMEOUT)
-                else $fatal(1, "[DRV ERROR]: AW handshake timeout");
+                else $fatal(1,
+                            "================================================================\n"
+                            "   [DRV FAIL]: AW HANDSHAKE TIMEOUT !                           \n"
+                            "   AW_ID = %0h, AW_ADDR = %0h, cycles = %0d                     \n"
+                            "================================================================", 
+                            AW_ID, AW_ADDR, cycles);
             end
 
             @(negedge ACLK);
             AW_VALID = 1'b0;
         endtask
 
-        task automatic handshake_w(input axi_write_transaction txn);
+        task automatic handshake_w(
+            input axi_write_transaction txn,
+            input int unsigned pre_delay = 0
+        );
             int cycles;
 
+            repeat(pre_delay) @(negedge ACLK);
+            @(negedge ACLK);
             for (int beat = 0; beat < txn.get_beat_count(); beat++) begin
                 cycles = 0;
                 W_DATA = txn.data[beat];
@@ -404,7 +409,12 @@ module PATTERN2 #(
                     cycles = cycles + 1;
                     w_stall_cycles = w_stall_cycles + 1;
                     CHECK_DRV_W_HS: assert (cycles < `HS_TIMEOUT)
-                    else $fatal(1, "[DRV ERROR]: W handshake timeout, beat=%0d", beat);
+                    else $fatal(1, 
+                                "================================================================\n"
+                                "   [DRV FAIL]: W_HANDSHAKE TIMEOUT !                            \n"
+                                "   beat = %0d, cycles = %0d                                     \n"
+                                "================================================================\n",
+                                beat, cycles);
                 end
 
                 @(negedge ACLK);
@@ -438,31 +448,25 @@ module PATTERN2 #(
                 cycles = cycles + 1;
                 ar_stall_cycles = ar_stall_cycles + 1;
                 CHECK_DRV_AR_HS: assert (cycles < `HS_TIMEOUT)
-                else $fatal(1, "[DRV ERROR]: AR handshake timeout");
+                else $fatal(1,
+                    "================================================================\n"
+                    "   [DRV FAIL]: AR HANDSHAKE TIMEOUT !                           \n"
+                    "   AR_ID = %0h, AR_ADDR = %0h, cycles = %0d                     \n"
+                    "================================================================",
+                    AR_ID, AR_ADDR, cycles);
             end
 
             @(negedge ACLK);
             AR_VALID = 1'b0;
         endtask
 
-        task automatic accept_b(
-            input axi_driver_ctrl ctrl,
-            output int unsigned observed_b_stall
-        );
+        task automatic accept_b(input axi_driver_ctrl ctrl);
             int cycles;
-            int unsigned stall_target;
 
-            observed_b_stall = 0;
             B_READY = 1'b0;
-            repeat(ctrl.b_ready_delay) @(negedge ACLK);
-
-            if (ctrl.random_b_stall) begin
-                stall_target = $urandom_range(5, 1);
-                repeat(stall_target) begin
-                    @(negedge ACLK);
-                    observed_b_stall = observed_b_stall + 1;
-                    b_stall_cycles = b_stall_cycles + 1;
-                end
+            repeat(ctrl.b_ready_delay) begin
+                @(negedge ACLK);
+                b_stall_cycles = b_stall_cycles + 1;
             end
 
             B_READY = 1'b1;
@@ -471,36 +475,30 @@ module PATTERN2 #(
                 @(negedge ACLK);
                 cycles = cycles + 1;
                 CHECK_DRV_B_HS: assert (cycles < `HS_TIMEOUT)
-                else $fatal(1, "[DRV ERROR]: B handshake timeout");
+                else $fatal(1,
+                    "================================================================\n"
+                    "   [DRV FAIL]: B HANDSHAKE TIMEOUT !                            \n"
+                    "   B_ID = %0h, B_RESP = %0h, cycles = %0d                       \n"
+                    "================================================================",
+                    B_ID, B_RESP, cycles);
             end
 
-            @(posedge ACLK);
-            // Deassert on negedge, after the DUT has sampled B_VALID && B_READY.
-            // Deasserting at this posedge races the DUT's always_ff block.
             @(negedge ACLK);
             B_READY = 1'b0;
         endtask
 
         task automatic accept_r(
             input int unsigned beat_count,
-            input axi_driver_ctrl ctrl,
-            output int unsigned observed_r_stall
+            input axi_driver_ctrl ctrl
         );
             int cycles;
-            int unsigned stall_target;
 
-            observed_r_stall = 0;
             R_READY = 1'b0;
-            repeat(ctrl.r_ready_delay) @(negedge ACLK);
 
             for (int beat = 0; beat < beat_count; beat++) begin
-                if (ctrl.random_r_stall) begin
-                    stall_target = $urandom_range(4, 0);
-                    repeat(stall_target) begin
-                        @(negedge ACLK);
-                        observed_r_stall = observed_r_stall + 1;
-                        r_stall_cycles = r_stall_cycles + 1;
-                    end
+                repeat(ctrl.r_ready_delay) begin
+                    @(negedge ACLK);
+                    r_stall_cycles = r_stall_cycles + 1;
                 end
 
                 R_READY = 1'b1;
@@ -509,12 +507,14 @@ module PATTERN2 #(
                     @(negedge ACLK);
                     cycles = cycles + 1;
                     CHECK_DRV_R_HS: assert (cycles < `HS_TIMEOUT)
-                    else $fatal(1, "[DRV ERROR]: R handshake timeout, beat=%0d", beat);
+                    else $fatal(1,
+                        "================================================================\n"
+                        "   [DRV FAIL]: R HANDSHAKE TIMEOUT !                            \n"
+                        "   beat = %0d, R_ID = %0h, R_RESP = %0h, cycles = %0d           \n"
+                        "================================================================",
+                        beat, R_ID, R_RESP, cycles);
                 end
 
-                @(posedge ACLK);
-                // Deassert on negedge, after the DUT has sampled R_VALID && R_READY.
-                // Deasserting at this posedge races the DUT's always_ff block.
                 @(negedge ACLK);
                 R_READY = 1'b0;
             end
@@ -524,34 +524,22 @@ module PATTERN2 #(
             input axi_write_transaction txn,
             input axi_driver_ctrl ctrl
         );
-            int unsigned dummy_stall;
-
-            if (ctrl.w_before_aw) begin
-                fork
-                    handshake_w(txn);
-                    begin
-                        repeat($urandom_range(8, 0)) @(negedge ACLK);
-                        handshake_aw(txn, ctrl.aw_delay_cycles);
-                    end
-                join
-            end
-            else begin
+            // AW and W are independent AXI channels. Their configured delays
+            // determine whether AW, W, or both become valid first.
+            fork
                 handshake_aw(txn, ctrl.aw_delay_cycles);
-                repeat(ctrl.w_gap_cycles) @(negedge ACLK);
-                handshake_w(txn);
-            end
+                handshake_w(txn, ctrl.w_delay_cycles);
+            join
 
-            accept_b(ctrl, dummy_stall);
+            accept_b(ctrl);
         endtask
 
         task automatic drive_read(
             input axi_read_request rd,
             input axi_driver_ctrl ctrl
         );
-            int unsigned dummy_stall;
-
             handshake_ar(rd, ctrl.ar_delay_cycles);
-            accept_r(rd.get_beat_count(), ctrl, dummy_stall);
+            accept_r(rd.get_beat_count(), ctrl);
         endtask
 
         task automatic drive_write_read(
@@ -594,12 +582,12 @@ module PATTERN2 #(
                     wr_collect_active = 1'b0;
                     wr_beat_count = 0;
                     pending_wr = null;
-                    continue;
                 end
-
-                if (AW_VALID && AW_READY) capture_aw();
-                if (W_VALID && W_READY) capture_w();
-                if (AR_VALID && AR_READY) capture_ar();
+                else begin
+                    if (AW_VALID && AW_READY) capture_aw();
+                    if (W_VALID && W_READY) capture_w();
+                    if (AR_VALID && AR_READY) capture_ar();
+                end
             end
         endtask
 
@@ -622,7 +610,12 @@ module PATTERN2 #(
 
         task automatic capture_w();
             if (!wr_collect_active || pending_wr == null) begin
-                $fatal(1, "[INMON ERROR]: W handshake without active AW collection");
+                $fatal(1,
+                    "================================================================\n"
+                    "   [INMON FAIL]: W HANDSHAKE WITHOUT ACTIVE AW COLLECTION !     \n"
+                    "   W_DATA = %08h, W_STRB = %0h, W_LAST = %0b                    \n"
+                    "================================================================",
+                    W_DATA, W_STRB, W_LAST);
             end
 
             pending_wr.data[wr_beat_count] = W_DATA;
@@ -631,10 +624,16 @@ module PATTERN2 #(
 
             if (W_LAST) begin
                 if (wr_beat_count != pending_wr.get_beat_count()) begin
-                    $fatal(1, "[INMON ERROR]: W beat count mismatch. expect=%0d get=%0d",
+                    $fatal(1,
+                        "================================================================\n"
+                        "   [INMON FAIL]: W BEAT COUNT MISMATCH !                        \n"
+                        "   expected = %0d, observed = %0d                                \n"
+                        "================================================================",
                         pending_wr.get_beat_count(), wr_beat_count);
                 end
-                wr_complete_mb.put(pending_wr.copy());
+                // Ownership moves to the mailbox; this monitor does not reuse
+                // or modify pending_wr after the transaction is published.
+                wr_complete_mb.put(pending_wr);
                 wr_collect_active = 1'b0;
                 wr_beat_count = 0;
                 pending_wr = null;
@@ -681,11 +680,11 @@ module PATTERN2 #(
                 @(posedge ACLK);
                 if (!ARESETn) begin
                     r_beat_index = 0;
-                    continue;
                 end
-
-                if (B_VALID && B_READY) capture_b();
-                if (R_VALID && R_READY) capture_r();
+                else begin
+                    if (B_VALID && B_READY) capture_b();
+                    if (R_VALID && R_READY) capture_r();
+                end
             end
         endtask
 
@@ -752,6 +751,7 @@ module PATTERN2 #(
             logic [ADDR_W:0] transfer_bytes;
             logic [12:0] boundary_sum;
 
+            // Calculate the total number of bytes transferred by one burst.
             transfer_bytes = ({1'b0, length} + 1'b1) << size;
             boundary_sum = {1'b0, address[11:0]} + transfer_bytes[12:0];
 
@@ -931,8 +931,12 @@ module PATTERN2 #(
             else begin
                 fail_b_count = fail_b_count + 1;
                 $fatal(1,
-                    "[SB FAIL] B mismatch. exp_id=%0h act_id=%0h exp_resp=%0h act_resp=%0h",
-                    exp.id, act.id, exp.resp, act.resp
+                    "================================================================\n"
+                    "   [SB FAIL]: B RESPONSE MISMATCH !                             \n"
+                    "   expected: B_ID = %0h, B_RESP = %0h                           \n"
+                    "   actual  : B_ID = %0h, B_RESP = %0h                           \n"
+                    "================================================================",
+                    exp.id, exp.resp, act.id, act.resp
                 );
             end
         endfunction
@@ -950,14 +954,19 @@ module PATTERN2 #(
             else begin
                 fail_r_count = fail_r_count + 1;
                 $fatal(1,
-                    "[SB FAIL] R mismatch beat=%0d. exp_addr=%08h act_data=%08h exp_data=%08h exp_resp=%0h act_resp=%0h exp_last=%0b act_last=%0b",
+                    "================================================================\n"
+                    "   [SB FAIL]: R BEAT MISMATCH !                                 \n"
+                    "   beat = %0d, address = %08h                                   \n"
+                    "   expected: data = %08h, resp = %0h, last = %0b                \n"
+                    "   actual  : data = %08h, resp = %0h, last = %0b                \n"
+                    "================================================================",
                     act.beat_index,
                     exp.addr,
-                    act.data,
                     exp.data,
                     exp.resp,
-                    act.resp,
                     exp.last,
+                    act.data,
+                    act.resp,
                     act.last
                 );
             end
@@ -1225,7 +1234,12 @@ module PATTERN2 #(
 
         function bit randomize_ok(input axi_write_transaction wr);
             if (!wr.randomize()) begin
-                $fatal(1, "[TEST ERROR]: randomize failed for %s", wr.name);
+                $fatal(1,
+                    "================================================================\n"
+                    "   [TEST FAIL]: RANDOMIZATION FAILED !                          \n"
+                    "   transaction = %s                                              \n"
+                    "================================================================",
+                    wr.name);
                 return 1'b0;
             end
             return 1'b1;
@@ -1244,7 +1258,7 @@ module PATTERN2 #(
                 wr,
                 predict_request(wr),
                 predict_write_b_response(wr),
-                w_ctrl.w_before_aw,
+                w_ctrl.w_delay_cycles < w_ctrl.aw_delay_cycles,
                 env.driver
             );
 
@@ -1261,7 +1275,10 @@ module PATTERN2 #(
 
             $display("[SEQ] basic single-beat write/read");
             wr = new("seq_basic");
-            if (!wr.randomize() with { len == 0; }) $fatal(1, "[TEST ERROR]: seq_basic randomize failed");
+            if (!wr.randomize() with { len == 0; }) $fatal(1,
+                "================================================================\n"
+                "   [TEST FAIL]: seq_basic RANDOMIZATION FAILED !                \n"
+                "================================================================");
             ctrl = new();
             run_write_read_check(wr, ctrl, ctrl);
         endtask
@@ -1291,7 +1308,10 @@ module PATTERN2 #(
                     foreach (strb[beat_index]) {
                         strb[beat_index] inside {4'h3, 4'hc, 4'h5, 4'ha};
                     }
-                }) $fatal(1, "[TEST ERROR]: seq_partial_strb randomize failed");
+                }) $fatal(1,
+                    "================================================================\n"
+                    "   [TEST FAIL]: seq_partial_strb RANDOMIZATION FAILED !         \n"
+                    "================================================================");
                 ctrl = new();
                 run_write_read_check(wr, ctrl, ctrl);
             end
@@ -1306,7 +1326,8 @@ module PATTERN2 #(
                 wr = new($sformatf("seq_w_before_aw_%0d", i));
                 if (!randomize_ok(wr)) continue;
                 ctrl = new();
-                ctrl.w_before_aw = 1'b1;
+                ctrl.aw_delay_cycles = $urandom_range(8, 1);
+                ctrl.w_delay_cycles = 0;
                 run_write_read_check(wr, ctrl, ctrl);
             end
         endtask
@@ -1322,8 +1343,20 @@ module PATTERN2 #(
                 if (!randomize_ok(wr)) continue;
                 w_ctrl = new();
                 r_ctrl = new();
-                w_ctrl.random_b_stall = 1'b1;
-                r_ctrl.random_r_stall = 1'b1;
+                if (!w_ctrl.randomize() with {
+                    b_ready_delay inside {[1:5]};
+                    r_ready_delay == 0;
+                }) $fatal(1,
+                    "================================================================\n"
+                    "   [TEST FAIL]: B BACKPRESSURE RANDOMIZATION FAILED !           \n"
+                    "================================================================");
+                if (!r_ctrl.randomize() with {
+                    b_ready_delay == 0;
+                    r_ready_delay inside {[1:5]};
+                }) $fatal(1,
+                    "================================================================\n"
+                    "   [TEST FAIL]: R BACKPRESSURE RANDOMIZATION FAILED !           \n"
+                    "================================================================");
                 run_write_read_check(wr, w_ctrl, r_ctrl);
             end
         endtask
@@ -1337,7 +1370,10 @@ module PATTERN2 #(
                 wr = new($sformatf("seq_unaligned_%0d", i));
                 wr.c_aligned_address.constraint_mode(0);
                 if (!wr.randomize() with { wr.addr[BYTE_OFFSET_W-1:0] != '0; }) begin
-                    $fatal(1, "[TEST ERROR]: seq_unaligned randomize failed");
+                    $fatal(1,
+                        "================================================================\n"
+                        "   [TEST FAIL]: seq_unaligned RANDOMIZATION FAILED !            \n"
+                        "================================================================");
                 end
                 ctrl = new();
                 run_write_read_check(wr, ctrl, ctrl);
@@ -1364,7 +1400,10 @@ module PATTERN2 #(
                     addr <= (BRAM_DEPTH * STRB_W) - ((len + 1) << size);
                     data.size() == len + 1;
                     strb.size() == len + 1;
-                }) $fatal(1, "[TEST ERROR]: seq_invalid_burst randomize failed");
+                }) $fatal(1,
+                    "================================================================\n"
+                    "   [TEST FAIL]: seq_invalid_burst RANDOMIZATION FAILED !        \n"
+                    "================================================================");
                 ctrl = new();
                 run_write_read_check(wr, ctrl, ctrl);
             end
@@ -1387,7 +1426,10 @@ module PATTERN2 #(
                     addr == base_addr;
                     data.size() == len + 1;
                     strb.size() == len + 1;
-                }) $fatal(1, "[TEST ERROR]: seq_4kb_cross randomize failed");
+                }) $fatal(1,
+                    "================================================================\n"
+                    "   [TEST FAIL]: seq_4kb_cross RANDOMIZATION FAILED !            \n"
+                    "================================================================");
                 ctrl = new();
                 run_write_read_check(wr, ctrl, ctrl);
             end
@@ -1404,7 +1446,10 @@ module PATTERN2 #(
                 if (!wr.randomize() with {
                     addr >= MEMORY_BYTES;
                     addr <= MEMORY_BYTES + 32'h100;
-                }) $fatal(1, "[TEST ERROR]: seq_full_oob randomize failed");
+                }) $fatal(1,
+                    "================================================================\n"
+                    "   [TEST FAIL]: seq_full_oob RANDOMIZATION FAILED !             \n"
+                    "================================================================");
                 ctrl = new();
                 run_write_read_check(wr, ctrl, ctrl);
             end
@@ -1427,7 +1472,10 @@ module PATTERN2 #(
                     addr == start_addr;
                     data.size() == len + 1;
                     strb.size() == len + 1;
-                }) $fatal(1, "[TEST ERROR]: seq_mid_oob randomize failed");
+                }) $fatal(1,
+                    "================================================================\n"
+                    "   [TEST FAIL]: seq_mid_oob RANDOMIZATION FAILED !              \n"
+                    "================================================================");
                 ctrl = new();
                 run_write_read_check(wr, ctrl, ctrl);
             end
@@ -1531,48 +1579,87 @@ module PATTERN2 #(
         @(posedge ACLK) disable iff(!ARESETn)
         AW_VALID && !AW_READY |=> $stable({AW_ID, AW_ADDR, AW_LEN, AW_SIZE, AW_BURST,
             AW_LOCK, AW_CACHE, AW_PROT, AW_QOS}))
-    else $fatal(1, "[ASSERT]: AW payload must stay stable while AWVALID=1 and AWREADY=0.");
+    else $fatal(1,
+        "================================================================\n"
+        "   [ASSERT FAIL]: AW PAYLOAD CHANGED WHILE STALLED !             \n"
+        "   AW_VALID = %0b, AW_READY = %0b, AW_ADDR = %08h               \n"
+        "================================================================",
+        AW_VALID, AW_READY, AW_ADDR);
 
     S_W_STABLE: assert property(
         @(posedge ACLK) disable iff(!ARESETn)
         W_VALID && !W_READY |=> $stable({W_DATA, W_STRB, W_LAST}))
-    else $fatal(1, "[ASSERT]: W payload must stay stable while WVALID=1 and WREADY=0.");
+    else $fatal(1,
+        "================================================================\n"
+        "   [ASSERT FAIL]: W PAYLOAD CHANGED WHILE STALLED !              \n"
+        "   W_VALID = %0b, W_READY = %0b, W_DATA = %08h                  \n"
+        "================================================================",
+        W_VALID, W_READY, W_DATA);
 
     S_B_STABLE: assert property(
         @(posedge ACLK) disable iff(!ARESETn)
         B_VALID && !B_READY |=> $stable({B_ID, B_RESP}))
-    else $fatal(1, "[ASSERT]: B payload must stay stable while BVALID=1 and BREADY=0.");
+    else $fatal(1,
+        "================================================================\n"
+        "   [ASSERT FAIL]: B PAYLOAD CHANGED WHILE STALLED !              \n"
+        "   B_VALID = %0b, B_READY = %0b, B_ID = %0h, B_RESP = %0h       \n"
+        "================================================================",
+        B_VALID, B_READY, B_ID, B_RESP);
 
     S_AR_STABLE: assert property(
         @(posedge ACLK) disable iff(!ARESETn)
         AR_VALID && !AR_READY |=> $stable({AR_ID, AR_ADDR, AR_LEN, AR_SIZE, AR_BURST,
             AR_LOCK, AR_CACHE, AR_PROT, AR_QOS}))
-    else $fatal(1, "[ASSERT]: AR payload must stay stable while ARVALID=1 and ARREADY=0.");
+    else $fatal(1,
+        "================================================================\n"
+        "   [ASSERT FAIL]: AR PAYLOAD CHANGED WHILE STALLED !             \n"
+        "   AR_VALID = %0b, AR_READY = %0b, AR_ADDR = %08h               \n"
+        "================================================================",
+        AR_VALID, AR_READY, AR_ADDR);
 
     S_R_STABLE: assert property(
         @(posedge ACLK) disable iff(!ARESETn)
         R_VALID && !R_READY |=> $stable({R_ID, R_DATA, R_RESP, R_LAST}))
-    else $fatal(1, "[ASSERT]: R payload must stay stable while RVALID=1 and RREADY=0.");
+    else $fatal(1,
+        "================================================================\n"
+        "   [ASSERT FAIL]: R PAYLOAD CHANGED WHILE STALLED !              \n"
+        "   R_VALID = %0b, R_READY = %0b, R_ID = %0h, R_DATA = %08h      \n"
+        "================================================================",
+        R_VALID, R_READY, R_ID, R_DATA);
 
     CHECK_RESET_VALID_LOW: assert property(
         @(posedge ACLK) !ARESETn |-> (!AW_VALID && !W_VALID && !AR_VALID))
-    else $fatal(1, "[ASSERT]: manager VALID must be low during reset.");
+    else $fatal(1,
+        "================================================================\n"
+        "   [ASSERT FAIL]: MANAGER VALID ASSERTED DURING RESET !          \n"
+        "   AW_VALID = %0b, W_VALID = %0b, AR_VALID = %0b                \n"
+        "================================================================",
+        AW_VALID, W_VALID, AR_VALID);
 
     CHECK_NO_X_AW: assert property(
         @(posedge ACLK) disable iff(!ARESETn)
         AW_VALID |-> (!$isunknown({AW_ID, AW_ADDR, AW_LEN, AW_SIZE, AW_BURST,
             AW_LOCK, AW_CACHE, AW_PROT, AW_QOS})))
-    else $fatal(1, "[ASSERT]: AW payload contains X/Z while AWVALID=1.");
+    else $fatal(1,
+        "================================================================\n"
+        "   [ASSERT FAIL]: AW PAYLOAD CONTAINS X/Z !                      \n"
+        "================================================================");
 
     CHECK_NO_X_W: assert property(
         @(posedge ACLK) disable iff(!ARESETn)
         W_VALID |-> (!$isunknown({W_DATA, W_STRB, W_LAST})))
-    else $fatal(1, "[ASSERT]: W payload contains X/Z while WVALID=1.");
+    else $fatal(1,
+        "================================================================\n"
+        "   [ASSERT FAIL]: W PAYLOAD CONTAINS X/Z !                       \n"
+        "================================================================");
 
     CHECK_NO_X_AR: assert property(
         @(posedge ACLK) disable iff(!ARESETn)
         AR_VALID |-> (!$isunknown({AR_ID, AR_ADDR, AR_LEN, AR_SIZE, AR_BURST,
             AR_LOCK, AR_CACHE, AR_PROT, AR_QOS})))
-    else $fatal(1, "[ASSERT]: AR payload contains X/Z while ARVALID=1.");
+    else $fatal(1,
+        "================================================================\n"
+        "   [ASSERT FAIL]: AR PAYLOAD CONTAINS X/Z !                      \n"
+        "================================================================");
 
 endmodule
